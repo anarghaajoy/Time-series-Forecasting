@@ -1,0 +1,524 @@
+---
+title: "Electricity Consumption (Time Series forecasting)"
+author: "Anargha Ajoykumar, Thien-An Bui, Cathy Ouyang, Hussein Abou Nassif Mourad"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+
+#setwd("~/R/MScA/2024/Winter 2024/Time Series Analysis and Forecasting/Homework/Final")
+
+rm(list=ls())
+```
+
+```{r installing libraries, include = FALSE}
+#install.packages("readxl")
+#install.packages("tidyverse")
+#install.packages("lubridate")
+#install.packages("forecast")
+#install.packages("tseries")
+#install.packages("seasonal")
+#install.packages("x13binary")
+#install.packages("arfima")
+#install.packages("astsa")
+```
+
+
+``` {r libraries}
+# Load necessary libraries
+library(readxl)
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(tseries)
+library(seasonal)
+library(arfima)
+library(astsa)
+library(TSA)
+library(fpp)
+```
+
+``` {r data}
+# Loading the dataset
+data <- read_excel("Electricity.xlsx", sheet = 2)
+
+#Cleaning data
+data <- data %>% 
+    slice(3:n()) %>% 
+    set_names(c('time','consumption'))
+
+# Convert the 'Date' column to a date format
+data$Date <- my(data$time)
+
+str(data)
+summary(data)
+
+# Plot the data to visually inspect the time series
+data %>% 
+  ggplot(aes(x = Date, y = consumption)) +
+  geom_line() +
+  labs(title = "Monthly Electricity Consumption", x = "Date", y = "Consumption (KW)")
+
+```
+
+
+
+``` {r EDA}
+# Histogram of consumption values to check distribution
+ggplot(data, aes(x = consumption)) +
+  geom_histogram(binwidth = 1, fill = "lightblue", color = "black") +
+  labs(title = "Distribution of Electricity Consumption",
+       x = "Consumption (KW)",
+       y = "Frequency") +
+  theme_minimal()
+
+# Boxplot to check for outliers by year
+data$Year <- year(data$Date)
+ggplot(data, aes(x = as.factor(Year), y = consumption)) +
+  geom_boxplot() +
+  labs(title = "Electricity Consumption by Year",
+       x = "Year",
+       y = "Consumption (KW)") +
+  theme_minimal()
+
+# Time series decomposition to observe seasonal and trend components
+data_ts <- ts(data$consumption, start = c(2014, 1), frequency = 12)
+decomposed_data <- stl(data_ts, s.window = "periodic")
+plot(decomposed_data)
+
+par(mfrow = c(2, 1), mar = c(4, 4, 2, 1), oma = c(0, 0, 2, 0))
+tsdisplay(data_ts, main = "Monthly Electricity Consumption in the UK")
+```
+
+### Observations
+
+We notice that there is a strong seasonal component present in our time series. The overall series exhibits a downward trend that has become more prevalent (larger in magnitude) in recent years.
+
+``` {r data Transformation}
+# Transform data to a ts object for forecasting
+data_ts <- ts(data$consumption, start = c(2014, 1), frequency = 12)
+
+# Check for stationarity with Augmented Dickey-Fuller Test
+adf_test_results <- adf.test(data_ts, alternative = "stationary")
+
+# Perform log transformation to stabilize variance if necessary
+data_ts_log <- log(data_ts)
+
+# Differencing to achieve stationarity if necessary
+data_ts_diff <- diff(data_ts_log, differences = 1)
+
+# Check stationarity again after differencing
+adf_test_results_diff <- adf.test(data_ts_diff, alternative = "stationary")
+adf_test_results_diff
+```
+
+```{r train/test split}
+training_ts <- window(data_ts, end = 2022)
+test_ts <- window(data_ts, start = 2022)
+
+forecast_horizon = 23
+```
+
+```{r}
+# View the training data
+par(mfrow = c(2, 1), mar = c(4, 4, 2, 1), oma = c(0, 0, 2, 0))
+tsdisplay(training_ts, main = "Train Data")
+(lambda <- BoxCox.lambda(training_ts))
+
+# Check for stationarity with Augmented Dickey-Fuller Test
+adf_test_results_for_train <- adf.test(training_ts, alternative = "stationary")
+adf_test_results_for_train
+```
+
+
+## Model 1: ARIMA / SARIMA
+
+``` {r ARIMA}
+# Automatically fit the best ARIMA model
+auto_arima_model <-  auto.arima(training_ts, lambda = 0, seasonal = TRUE)
+
+# Check the summary of the model
+summary(auto_arima_model)
+
+# Forecast using the ARIMA model (next year)
+arima_forecast <- forecast(auto_arima_model, h = forecast_horizon, lambda = 0) 
+plot(arima_forecast)
+
+# Plot the test dataset and forecasted values
+plot(test_ts, main = "ARIMA Test Dataset and Forecasted Values", ylab = "Consumption", xlab = "Year")
+
+# Add forecasted values to the plot
+lines(arima_forecast$mean, col = "red", lty = 2, lwd = 2)
+
+# Check residuals of ARIMA
+checkresiduals(auto_arima_model)
+```
+
+
+``` {r Seasonal ARIMA}
+# Fit a SARIMA model
+sarima_model <- Arima(training_ts, order = c(1,1,1), seasonal = c(1,1,1), lambda = 0)
+
+# Summary of the model
+summary(sarima_model)
+
+# Forecast using the SARIMA model
+sarima_forecast <- forecast(sarima_model, h = forecast_horizon, lambda = 0)
+plot(sarima_forecast)
+
+# Plot the test dataset and forecasted values
+plot(test_ts, main = "SARIMA Test Dataset and Forecasted Values", ylab = "Consumption", xlab = "Year")
+
+# Add forecasted values to the plot
+lines(sarima_forecast$mean, col = "red", lty = 2, lwd = 2)
+
+# Check residuals of SARIMA
+checkresiduals(sarima_model)
+```
+
+### ARIMA/SARIMA Model Evaluation
+
+AIC: The ARIMA model demonstrates superior performance with an AIC of -356.11, compared to the SARIMA model's AIC of -346.17. This indicates that the ARIMA model achieves a better balance between goodness of fit and simplicity, making it more efficient in explaining the variance in the data without overfitting.
+
+BIC: Similarly, the ARIMA model exhibits a lower BIC of -343.9 against the SARIMA model's BIC of -334.02. A lower BIC value suggests that the ARIMA model is more preferable, considering both the model complexity and the amount of data utilized, endorsing its selection over the SARIMA model.
+
+Log Likelihood: The likelihood of the data given the model is higher for the ARIMA model (log likelihood = 183.06) than for the SARIMA model (log likelihood = 178.08). This outcome further supports the ARIMA model's better fit to the data.
+
+Error Measures: Analyzing error metrics, both models display comparable performance in terms of RMSE (Root Mean Square Error) and MAE (Mean Absolute Error). The ARIMA model exhibits a slightly lower RMSE (0.606 vs. 0.622) and a marginally higher MAE (0.425 vs. 0.425) relative to the SARIMA model. These minor differences underscore the competitive accuracy of both models in forecasting, albeit with a slight edge for the ARIMA model in terms of prediction precision.
+
+``` {r acf}
+# ACF and PACF for the stationary series
+Acf(data_ts_diff)
+Pacf(data_ts_diff)
+
+# Spectral Analysis
+spectral <- spectrum(data_ts_log)
+plot(spectral)
+```
+### Explanation of ACF, PACF, and Spectral
+ACF: The ACF plot reveals a smooth decrease with notable spikes at seasonal lags. Particularly lags 12, 24, which are multiples of 12, indicating a clear annual seasonal effect. The spikes in the forecast error of the model recognize the necessity of seasonal differencing and seasonal moving average components in the model to represent this seasonality.
+
+PACF: The significant spikes in the PACF plot in the first lag and then cut off, this means that AR(1) might be suitable for the nonseasonal part of the model. The fact that cut-off follows the first lag shows that higher-lag lags are not necessary in autoregressive part of the model.
+
+Spectral Analysis: The graph from the spectral analysis shows a big peak at the highest frequency. This means we see a strong pattern that repeats every year, because our data is collected every month and this peak matches up with a 12-month cycle. This big peak tells us that the data changes a lot with the seasons. To make our SARIMA model work better with this kind of data, we need to adjust it for these seasonal changes. We do this by using seasonal differencing and adding seasonal settings to our model.
+
+In summary, our analysis of electricity usage data shows clear seasonal patterns. This is evident from the strong peaks seen in the spectral analysis and the noticeable spikes at seasonal intervals in the ACF (Autocorrelation Function) plot. The PACF (Partial Autocorrelation Function) plot quickly drops after the first point, indicating that the model's predictive part based on past data (autoregressive component) should be simple, likely just one step back. These observations are crucial for building the SARIMA model, highlighting the importance of considering both seasonal changes and regular patterns to capture the data's behavior accurately. The significant seasonal peak, along with the ACF and PACF findings, guides us in selecting the right SARIMA model setup to effectively manage both the seasonal and non-seasonal elements of the data.
+
+## Model 2: ARFIMA
+
+```{r}
+# Reviewing lags up to 100 for long term memory consideration
+acf2(data_ts, max.lag = 100)
+acf2(training_ts, max.lag = 50)
+```
+#### Observations: 
+
+Our ACF plots for the time series data does appear to contain a persistent pattern of moderately high values. ARFIMA may be appropriate for our analysis here.
+
+```{r arfima}
+# Initiate our ARFIMA Model
+arfima_model <- forecast::arfima(log(training_ts))
+summary(arfima_model)
+arfima_model$
+
+# Extract the fractional difference value & associated standard error
+d = summary(arfima_model)$coef[[1]][1] 
+```
+
+
+```{r}
+# Forecast using ARFIMA model
+arfima_forecasts <- forecast(arfima_model, h = forecast_horizon)
+
+# Plot the test dataset and forecasted values
+plot(test_ts, main = "ARFIMA Test Dataset and Forecasted Values", ylab = "Consumption", xlab = "Year")
+
+# Add forecasted values to the plot
+lines(exp(arfima_forecasts$mean), col = "red", lty = 2, lwd = 2)
+
+```
+
+
+### (Non-seasonal) ARFIMA Model Evaluation
+
+We obtain a fractional differencing value of d = 0.041525, suggesting that our arfima process exhibits long memory. Our criteria values are as follows:
+
+AIC: -315.1617
+Log-likelihood = 164.6
+
+```{r arfima residuals}
+# Checking the residuals of ARFIMA model
+arfima_resid <- residuals(arfima_model)
+
+# Checking the ACF/PACF for residuals of ARFIMA model
+tsdisplay(arfima_resid, main = "ARFIMA Residuals of Electricity Consumption")
+
+```
+
+While the ARFIMA model does appear to be a good fit, we still see some seasonality patterns present within the residuals plot. We could improve this model in future work by layering on seasonality components or integrating this fractional differencing model (ie. the d value given) within seasonal models.
+
+
+## Actionable Insights (may not be true after models are revised. Need to be reviewed before finalizing -- TAB)
+The ARIMA model with drift appears to provide a slightly better fit to the data based on the AIC, BIC, and log likelihood values. The drift term in the ARIMA model suggests a trending behavior in the logged electricity consumption data.
+
+Using a fractional differencing model demonstrated better performance compared to first-degree differencing. This is true for both the non-seasonal and seasonal ARFIMA models (when compared to the ARIMA and SARIMA models),  suggesting that using first degree differencing for our analysis leads to an overdifferencing that may have introduced unnecessary correlations into the time series, thus overcomplicating our model. We should note that layering on a seasonal component to the ARFIMA model saw a significant improvement in model performance, further supporting our claims that a seasonal component will greatly contribute to our model's performance in forecasting future values.
+
+
+## Model 3: Exponential Smoothing
+
+
+### Holt-Winters Method
+
+```{r}
+# Decompose the additive and multiplicative models 
+decompose_add <- decompose(log(training_ts), type="additive")
+decompose_mult <- decompose(log(training_ts), type="multiplicative")
+
+plot(decompose_add)
+plot(decompose_mult)
+```
+
+
+```{r}
+# Additive, No Damping 
+fit_add <- hw(log(training_ts), seasonal="additive")
+plot(fit_add)
+summary(fit_add)
+fit_add$model
+
+hw_forecasts <- forecast(fit_add, h = forecast_horizon)
+plot(test_ts, main = "Holt-Winters Test Dataset and Forecasted Values", ylab = "Consumption", xlab = "Year")
+
+lines(exp(fit_add$mean), col="red", lty=2, lwd=2)
+
+```
+
+```{r}
+# Additive, Damping 
+fit_add_damped <- hw(log(training_ts), seasonal="additive", damped=TRUE)
+plot(fit_add_damped)
+summary(fit_add_damped)
+fit_add_damped$model
+
+hw_forecasts_damped <- forecast(fit_add_damped, h=forecast_horizon)
+plot(test_ts, main="Holt-Winters Test Dataset and Forecasted Values", ylab="Consumption", xlab="Year")
+
+lines(exp(fit_add_damped$mean), col="red", lty=2, lwd=2)
+```
+
+
+## Interpretation
+Since the amplitude of the seasonality in our time series plot is generally the same, we can use additive to fit these models. We fit an additive model without damping and another with damping. The one without damping has an AICc of -275 while the one with damping has an AICc of -273. The results are similar but the additive without damping produces the lowest AICc and is therefore the best model to use for exponential smoothing. However, these AICc values are not as low as some of the earlier models that we fit. In both models, the beta value is very low which means the slope component hardly changes over time. Gamma is also a very low value which means that the seasonal component also hardly changes over time. 
+
+
+## Model 4: Spectral Analysis Models
+
+```{r}
+
+#Plotting the periodogram
+periodogram(data_ts, 
+            ylab = 'Periodogram', 
+            main = "Periodogram for Monthly Electricity Consumption")
+
+#Taking the maximum frequencies
+temp <- periodogram(data_ts, 
+                    ylab = 'Periodogram', 
+                    main = "Periodogram for Monthly Electricity Consumption")
+
+#Finding the dominant frequency
+max_freq <- temp$freq[which.max(temp$spec)]
+seasonality1 <- 1/max_freq
+print(paste0('The main seasonality exhibited in this data is ', seasonality1, ' months'))
+
+#Finding the second dominant frequency
+second_spec <- sort(temp$spec, decreasing = TRUE)[[2]]
+second_freq <- temp$freq[which(temp$spec==second_spec)]
+seasonality2 <- 1/second_freq
+print(paste0('The second dominant seasonality exhibited in this data is ', seasonality2, ' months'))
+
+
+```
+
+### Interpretation of Periodogram
+
+Upon analysing the periodogram, the signal is a linear combination of multiple frequencies and the dominant frequency is .083 which gives a period of 12 months ie, 1 year. It is obvious from the time series plot that the more dominant seasonality is occuring per year. Every year the electricity consumption increases during winter which appears as a peak of wave and then decrease during summer. The second dominant frequency shown by the periodogram is 0.0083 which gives a period of 120 months, ie, 10 year. However we cannot confirm this seasonality as there is only 10 years of data with us. But with climatic changes happening across the world from period to period, we cannot completely ignore the possibility of a 10 year seasonality.
+
+
+### 4.1: Dynamic Harmonic Regression
+
+```{r}
+
+#Defining Harmonic regression
+best_fit <- list(aicc = Inf)
+for (i in 1:6){
+    harmonic_model <- auto.arima(training_ts, 
+                                 xreg = fourier(training_ts, K = i), 
+                                 seasonal = FALSE, 
+                                 lambda = 0)
+    if (harmonic_model$aicc < best_fit$aicc)
+        best_fit <- harmonic_model
+    else
+        break
+}
+
+
+#Forecasting model
+harmonic_forecast <- forecast(harmonic_model, 
+                              xreg = fourier(training_ts, K = 6, h = forecast_horizon))
+
+#Plotting result
+plot(harmonic_forecast, main = 'Forecast plot for dynamic harmonic regressioin')
+
+#Plotting test data and forecast alone
+plot(test_ts, main="Dynamic Harmonic Regression - Test Dataset and Forecasted Values", ylab="Consumption", xlab="Year", ylim = c(20,30))
+
+lines(harmonic_forecast$mean, 
+      col="red", 
+      lty=2, 
+      lwd=2)
+
+```
+
+### Evaluation of Dynamic Harmonic regression model
+
+```{r}
+#Summary
+summary(harmonic_model)
+
+#Accuracy
+harmonic_accuracy <- forecast::accuracy(harmonic_forecast)
+print(paste('The RMSE of the Dynamic Harmonic regression model is: ', round(harmonic_accuracy[2], 3)))
+
+#Residuals
+checkresiduals(harmonic_model)
+
+```
+
+### Interpretation of Dynamic Harmonic Regression model
+
+The model derived a  regression model with ARIMA(1,1,1) errors and k = 6. Model showed a AICc = -409.59 and BIC = -378.88. The optimum k was chosen with lowest value of AICc. The model shows a good prediction with RMSE 0.602 small prediction intervals. The residuals also shows a zero mean and 2 correlations among residual lag. The histogram of residuals shows they are normal except for some outliers which tells us a wider prediction interval. The Ljung-Box test also provide evidence to accept the null hypothesis, that the residuals are independent. As a conclusion the model is promising with great forecasting capabilities.
+
+
+
+### 4.2: TBATS Model
+
+```{r}
+
+#Defining tbats model
+tbats_model <- tbats(training_ts)
+
+
+#Forecasting with tbats
+tbats_forecast <- forecast(tbats_model, h = forecast_horizon)
+
+#Plotting forecasts
+plot(tbats_forecast)
+
+#Plotting test data and forecast alone
+plot(test_ts, 
+     main = "TBATS - Test Dataset and Forecasted Values", 
+     ylab = "Consumption", 
+     xlab = "Year")
+
+lines(tbats_forecast$mean, col="red", lty=2, lwd=2)
+
+```
+
+### Evaluation of TBATS model
+
+```{r}
+
+#Summary
+summary(tbats_model)
+print(paste0('The AIC of TBATS model is: ', tbats_model$AIC))
+
+#Accuracy
+tbats_accuracy <- forecast::accuracy(tbats_model)
+print(paste('The RMSE of the TBATS model is: ', round(tbats_accuracy[2], 3)))
+
+#Residuals
+checkresiduals(tbats_model)
+
+
+```
+
+
+### Interpretation of TBATS model
+
+The TBATS model showed the result TBATS(0.992, {0,0}, - , {12,5}) indicating it chose Box-cox parameter = 0.992 almost equal to 1 (No transformation chosen), p = 0 and q = 0 from ARIMA model, no damping parameter and seasonality of 12 months with k = 5. The RMSE of the forecast was 0.708 which is greater than dynamic harmonic regression model and so not a desirable outcome. The residual analysis also do not point tbats model to be a better performing one. Although the residuals have a zero mean, the ACF plot shows significant correlation between the residuals. The ljung-Box test also provide evidence to reject the null hypothesis, ie the residuals are highly correlated. Although the residuals show normality as from histogram, presence of outliers suggest wider prediction intervals. To conclude, tbats model may not be the best model to fit the data and forecast.
+
+
+```{r accuracy metrics}
+# Actual test data
+actual_data <- as.numeric(test_ts)
+
+# Forecasted values from models
+arfima_forecast_values <- exp(arfima_forecasts$mean)
+arima_forecast_values <- arima_forecast$mean
+sarima_forecast_values <- sarima_forecast$mean
+hw_forecast_values <- exp(hw_forecasts$mean)
+harmonic_forecast_values <- harmonic_forecast$mean
+tbats_forecast_values <- tbats_forecast$mean
+
+
+# Calculate MAPE
+arfima_mape <- mean(abs((actual_data - arfima_forecast_values) / actual_data)) * 100
+arima_mape <- mean(abs((actual_data - arima_forecast_values) / actual_data)) * 100
+sarima_mape <- mean(abs((actual_data - sarima_forecast_values) / actual_data)) * 100
+hw_mape <- mean(abs((actual_data - hw_forecast_values) / actual_data)) * 100
+harmonic_mape <- mean(abs((actual_data - harmonic_forecast_values) / actual_data)) * 100
+tbats_mape <- mean(abs((actual_data - tbats_forecast_values) / actual_data)) * 100
+
+# Calculate MSE
+arfima_mse <- mean((actual_data - arfima_forecast_values)^2)
+arima_mse <- mean((actual_data - arima_forecast_values)^2)
+sarima_mse <- mean((actual_data - sarima_forecast_values)^2)
+hw_mse <- mean((actual_data - hw_forecast_values)^2)
+harmonic_mse <- mean((actual_data - harmonic_forecast_values)^2)
+tbats_mse <- mean((actual_data - tbats_forecast_values)^2)
+
+
+# Calculate RMSE
+arfima_rmse <- sqrt(mean((actual_data - arfima_forecast_values)^2))
+arima_rmse <- sqrt(mean((actual_data - arima_forecast_values)^2))
+sarima_rmse <- sqrt(mean((actual_data - sarima_forecast_values)^2))
+hw_rmse <- sqrt(mean((actual_data - hw_forecast_values)^2))
+harmonic_rmse <- sqrt(mean((actual_data - harmonic_forecast_values)^2))
+tbats_rmse <- sqrt(mean((actual_data - tbats_forecast_values)^2))
+
+
+# Print the results
+
+cat("MAPE - ARIMA:", arima_mape, "%\n")
+cat("MSE - ARIMA:", arima_mse, "\n")
+cat("RMSE - ARIMA:", arima_rmse, "\n")
+
+cat("\nMAPE - SARIMA:", sarima_mape, "%\n")
+cat("MSE - SARIMA:", sarima_mse, "\n")
+cat("RMSE - SARIMA:", sarima_rmse, "\n")
+
+cat("\nMAPE - ARFIMA:", arfima_mape, "%\n")
+cat("MSE - ARFIMA:", arfima_mse, "\n")
+cat("RMSE - ARFIMA:", arfima_rmse, "\n")
+
+cat("\nMAPE - Holt-Winters:", hw_mape, "%\n")
+cat("MSE - Holt-Winters:", hw_mse, "\n")
+cat("RMSE - Holt-Winters:", hw_rmse, "\n")
+
+cat("\nMAPE - Harmonic Dynamic Regression:", harmonic_mape, "%\n")
+cat("MSE - Harmonic Dynamic Regression:", harmonic_mse, "\n")
+cat("RMSE - Harmonic Dynamic Regression:", harmonic_rmse, "\n")
+
+cat("\nMAPE - TBATS:", tbats_mape, "%\n")
+cat("MSE - TBATS:", tbats_mse, "\n")
+cat("RMSE - TBATS:", tbats_rmse, "\n")
+
+```
+
+
+
+We choose Holt-Winters to be the better performing model.
+
+
